@@ -26,6 +26,12 @@ void setup()
   radio.setVolume(0);
 }
 
+void displayInfo()
+{
+   Serial.print("Channel:"); Serial.print(channel); 
+   Serial.print(" Volume:"); Serial.println(volume); 
+}
+
 void loop()
 {
   if (Serial.available())
@@ -77,8 +83,3 @@ void loop()
   }
 }
 
-void displayInfo()
-{
-   Serial.print("Channel:"); Serial.print(channel); 
-   Serial.print(" Volume:"); Serial.println(volume); 
-}
