@@ -8,7 +8,6 @@ int SCLK = A5;
 Si4703_Breakout radio(resetPin, SDIO, SCLK);
 int channel;
 int volume;
-char rdsBuffer[10];
 
 void setup()
 {
@@ -34,6 +33,8 @@ void displayInfo()
 
 void loop()
 {
+  radio.pollRDS();
+
   if (Serial.available())
   {
     char ch = Serial.read();
@@ -75,10 +76,31 @@ void loop()
     }
     else if (ch == 'r')
     {
-      Serial.println("RDS listening");
-      radio.readRDS(rdsBuffer, 15000);
-      Serial.print("RDS heard:");
-      Serial.println(rdsBuffer);      
+      const char* rdsName = radio.getRDSName();
+      if (rdsName) {
+        Serial.print(rdsName);
+        const char* rdsText = radio.getRDSText();
+        if (rdsText) {
+          Serial.print(" - ");
+          Serial.print(rdsText);
+        }
+        Serial.println();
+      }
+      uint8_t hours, minutes;
+      if (radio.getRDSTime(hours, minutes)) {
+        Serial.print(hours);
+        Serial.print(":");
+        Serial.println(minutes);
+      }
+      uint8_t day, month;
+      uint16_t year;
+      if (radio.getRDSDate(day, month, year)) {
+        Serial.print(day);
+        Serial.print(".");
+        Serial.print(month);
+        Serial.print(".");
+        Serial.println(year);
+      }      
     }
   }
 }
