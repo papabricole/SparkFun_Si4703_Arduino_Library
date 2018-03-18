@@ -55,10 +55,36 @@ class Si4703_Breakout
 	int seekUp(); 					// returns the tuned channel or 0
 	int seekDown(); 				
 	void setVolume(int volume); 	// 0 to 15
+
+    // deprecated - use pollRDS() instead.
 	void readRDS(char* message, long timeout);	
 									// message should be at least 9 chars
 									// result will be null terminated
 									// timeout in milliseconds
+
+    // Poll RDS info. Call it as much as possible in your loop()
+    // otherwise no RDS info will be received.
+    // Internally, the polling will occurs once every 40ms.
+    void pollRDS();
+
+    // Return the station name for the current channel.
+    // NULL is return if there is no RDS info or nothing was received since the
+    // last pollRDS() call. Continue to call pollRDS() and try again later.
+    // NOTE: some stations change their name from time to time (scrolling).
+    const char* getRDSName() const;
+
+    // Return the radio text for the current channel.
+    // NULL is return if there is no RDS info or nothing was received since the
+    // last pollRDS() call. Continue to call pollRDS() and try again later.
+    // NOTE: the text can change at any time.
+    const char* getRDSText() const;
+
+    // Return RDS time/date.
+    // Return false if there no RDS info or nothing was received since the
+    // last pollRDS() call. Continue to call pollRDS() and try again later.
+    // NOTE: time info are sent every minutes, be patient.
+    bool getRDSTime(uint8_t& hours, uint8_t& minutes) const;
+    bool getRDSDate(uint8_t& day, uint8_t& month, uint16_t& year) const;
   private:
     int  _resetPin;
 	int  _sdioPin;
@@ -116,6 +142,13 @@ class Si4703_Breakout
 	static const uint16_t  AFCRL = 12;
 	static const uint16_t  RDSS = 11;
 	static const uint16_t  STEREO = 8;
+
+    unsigned long _rdsLastPoll;
+    char _rdsName[9];
+    char _rdsText[65];
+    unsigned long _rdsTimePoll;
+    uint16_t _rdsMinutes;
+    uint32_t _rdsModifiedJulianDayCode;
 };
 
 #endif

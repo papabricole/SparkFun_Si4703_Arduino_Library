@@ -7,6 +7,11 @@ Si4703_Breakout::Si4703_Breakout(int resetPin, int sdioPin, int sclkPin)
   _resetPin = resetPin;
   _sdioPin = sdioPin;
   _sclkPin = sclkPin;
+
+  _rdsLastPoll = 0;
+  _rdsTimePoll = 0;
+  _rdsMinutes = 0;
+  _rdsModifiedJulianDayCode = 0;
 }
 
 void Si4703_Breakout::powerOn()
@@ -22,6 +27,10 @@ void Si4703_Breakout::setChannel(int channel)
   int newChannel = channel * 10; //973 * 10 = 9730
   newChannel -= 8750; //9730 - 8750 = 980
   newChannel /= 10; //980 / 10 = 98
+
+  // Reset cached RDS infos on channel change
+  memset(_rdsName, 0, 9);
+  memset(_rdsText, 0, 65);
 
   //These steps come from AN230 page 20 rev 0.5
   readRegisters();
@@ -72,44 +81,123 @@ void Si4703_Breakout::setVolume(int volume)
 void Si4703_Breakout::readRDS(char* buffer, long timeout)
 { 
 	long endTime = millis() + timeout;
-  boolean completed[] = {false, false, false, false};
-  int completedCount = 0;
-  while(completedCount < 4 && millis() < endTime) {
-	readRegisters();
-	if(si4703_registers[STATUSRSSI] & (1<<RDSR)){
-		// ls 2 bits of B determine the 4 letter pairs
-		// once we have a full set return
-		// if you get nothing after 20 readings return with empty string
-	  uint16_t b = si4703_registers[RDSB];
-	  int index = b & 0x03;
-	  if (! completed[index] && b < 500)
-	  {
-		completed[index] = true;
-		completedCount ++;
-	  	char Dh = (si4703_registers[RDSD] & 0xFF00) >> 8;
-      	char Dl = (si4703_registers[RDSD] & 0x00FF);
-		buffer[index * 2] = Dh;
-		buffer[index * 2 +1] = Dl;
-		// Serial.print(si4703_registers[RDSD]); Serial.print(" ");
-		// Serial.print(index);Serial.print(" ");
-		// Serial.write(Dh);
-		// Serial.write(Dl);
-		// Serial.println();
-      }
-      delay(40); //Wait for the RDS bit to clear
-	}
-	else {
-	  delay(30); //From AN230, using the polling method 40ms should be sufficient amount of time between checks
-	}
-  }
-	if (millis() >= endTime) {
-		buffer[0] ='\0';
-		return;
-	}
-
-  buffer[8] = '\0';
+    while(strlen(getRDSName()) < 8 && millis() < endTime) {
+        pollRDS();
+    }
+    memcpy(buffer, getRDSName(), 9);
+    buffer[8] = '\0';
 }
 
+void Si4703_Breakout::pollRDS()
+{
+    //From AN230, using the polling method 40ms should be sufficient amount of time between checks
+    if (millis() - _rdsLastPoll < 40)
+        return;
+    _rdsLastPoll = millis();
+
+    readRegisters();
+    const byte blockerrors = (si4703_registers[STATUSRSSI] & 0x0600) >> 9;
+    if (blockerrors != 0)
+         return;
+    if (si4703_registers[STATUSRSSI] & (1 << RDSR)) {
+
+        const uint8_t groupType = (si4703_registers[RDSB] & 0xF000) >> 12;
+        const bool BType = (si4703_registers[RDSB] & 0x0800) >> 11;
+
+        switch (groupType) {
+        case 0: // Station Name (8 chars)
+        {
+            const uint8_t CS = constrain(si4703_registers[RDSB] & 0x0003, 0, 7);
+            const uint8_t C0 = (si4703_registers[RDSD] & 0xFF00) >> 8;
+            const uint8_t C1 = (si4703_registers[RDSD] & 0x00FF);
+
+            // Reset text if some changes are detected.
+            if ((_rdsName[2 * CS + 0] != '\0' && _rdsName[2 * CS + 0] != C0) ||
+                (_rdsName[2 * CS + 1] != '\0' && _rdsName[2 * CS + 1] != C1)) {
+                memset(_rdsName, 0, 9);
+            }
+            _rdsName[2 * CS + 0] = C0;
+            _rdsName[2 * CS + 1] = C1;
+        } break;
+        case 2: // Radio Text (64 chars)
+        {
+            const bool clear = (si4703_registers[RDSB] & 0x0010) >> 4;
+            const uint8_t CS = constrain(si4703_registers[RDSB] & 0x000F, 0, 63);
+            const uint8_t C0 = (si4703_registers[RDSC] & 0xFF00) >> 8;
+            const uint8_t C1 = (si4703_registers[RDSC] & 0x00FF);
+            const uint8_t C2 = (si4703_registers[RDSD] & 0xFF00) >> 8;
+            const uint8_t C3 = (si4703_registers[RDSD] & 0x00FF);
+
+            if (clear) {
+                memset(_rdsText, 0, 65);
+            }
+            if (!BType) {
+                _rdsText[4 * CS + 0] = C0;
+                _rdsText[4 * CS + 1] = C1;
+                _rdsText[4 * CS + 2] = C2;
+                _rdsText[4 * CS + 3] = C3;
+            } else {
+                _rdsText[2 * CS + 0] = C2;
+                _rdsText[2 * CS + 1] = C3;
+            }
+        } break;
+        case 4: // Clock Time and Date (CT)
+        {
+            const uint8_t localTimeOffset = (si4703_registers[RDSD] & 0x001F);
+            const int8_t localOffsetSign = (si4703_registers[RDSD] & 0x0020) >> 5 ? -1 : 1;
+            const uint8_t UTCMinutes = (si4703_registers[RDSD] & 0x0FC0) >> 6;
+            const uint8_t UTCHours = ((si4703_registers[RDSC] & 0x0001) << 4) | ((si4703_registers[RDSD] & 0xF000) >> 12);
+
+            _rdsTimePoll = millis();
+            _rdsMinutes = 60 * UTCHours + UTCMinutes + localOffsetSign * 30 * localTimeOffset;
+            _rdsModifiedJulianDayCode = ((si4703_registers[RDSB] & 0x0003) << 15) | (si4703_registers[RDSC] >> 1);
+        } break;
+        default:
+            break;
+        }
+     }
+}
+
+const char* Si4703_Breakout::getRDSName() const
+{
+    return strlen(_rdsName) > 0 ? _rdsName : NULL;
+}
+
+const char* Si4703_Breakout::getRDSText() const
+{
+    return strlen(_rdsText) > 0 ? _rdsText : NULL;
+}
+
+bool Si4703_Breakout::getRDSTime(uint8_t& hours, uint8_t& minutes) const
+{
+    if (_rdsMinutes == 0)
+        return false;
+    const unsigned long elapsed = (millis() - _rdsTimePoll) / 60000;
+    hours = (_rdsMinutes + elapsed) / 60;
+    minutes = (_rdsMinutes + elapsed) % 60;
+
+    return true;
+}
+
+bool Si4703_Breakout::getRDSDate(uint8_t& day, uint8_t& month, uint16_t& year) const
+{
+    if (_rdsModifiedJulianDayCode == 0)
+        return false;
+
+    uint32_t J = _rdsModifiedJulianDayCode + 2400001 + 68569;
+    uint32_t C = 4 * J / 146097;
+    J = J - (146097 * C + 3) / 4;
+    uint32_t Y = 4000 * (J + 1) / 1461001;
+    J = J - 1461 * Y / 4 + 31;
+    uint32_t M = 80 * J / 2447;
+    day = J - 2447 * M / 80;
+    J = M / 11;
+    month = M + 2 - (12 * J);
+    year = 100 * (C - 49) + Y + J;
+
+    return true;
+}
+ 
 
 
 
@@ -198,6 +286,10 @@ byte Si4703_Breakout::updateRegisters() {
 //Returns the freq if it made it
 //Returns zero if failed
 int Si4703_Breakout::seek(byte seekDirection){
+  // Reset cached RDS infos on channel change
+  memset(_rdsName, 0, 9);
+  memset(_rdsText, 0, 65);
+
   readRegisters();
   //Set seek mode wrap bit
   si4703_registers[POWERCFG] |= (1<<SKMODE); //Allow wrap
