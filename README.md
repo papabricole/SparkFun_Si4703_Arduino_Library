@@ -1,3 +1,13 @@
+FORK
+========================================
+This fork fix the RDS polling and additionally parse the radio text, time and date.
+If your radio module does not travel, the entire RDS system is quite useless.
+Station names could be stored in a simple text file.
+For the radio text, the interrest is quite limited: some station broadcast the
+current title of the music played, which is nice, some other advertisement or slogan...
+For the time and date, it could be useful if you trust the radio station, which
+I personnally don't. 
+
 SparkFun Si4703 Arduino Library
 ========================================
 
